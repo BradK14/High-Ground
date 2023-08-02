@@ -9,16 +9,17 @@ public class PlayerController : NetworkBehaviour
     // Variables
     // Initialized in the inspector
     // Initialized at spawn
-    [Networked] GameManager gameManager { get; set; }
-    [Networked] private MapInfo map { get; set; }
+    GameManager gameManager;
+    private MapInfo map;
     private List<Unit> units;
-    private List<TileInfo> movePreview;
-    private List<TileInfo> pathable;
-    private List<TileInfo> path;
-    [Networked] private bool setUpComplete { get; set; }
+    private List<Structure> structures;
+    private int resources;
+    private BaseUI ui;
+    private bool setupComplete;
     private int posX;
     private int posY;
     private bool isMyTurn;
+    private int numBases;
     private TickTimer shiftMoveTimer;
     private TickTimer heldMoveTimer;
     private TickTimer heldMovingTimer;
@@ -31,25 +32,30 @@ public class PlayerController : NetworkBehaviour
     private bool rightRepeat;
     private bool downRepeat;
     private bool enterRepeat;
+    private bool backRepeat;
+    private bool rightMouseRepeat;
+    private bool mouseDragHeld;
+    private Vector2 mousePrevPos;
     // Initialized at run time
     [Networked] private PlayerRef playerRef { get; set; }
     [Networked] private int playerNum { get; set; }
     private Unit unit;
-    private TileInfo unitPrevTile;
+    private Structure structure;
     private TileInfo curTile;
+    private TileInfo mouseTile;
 
     // Functions
     // Start Function
     public override void Spawned()
     {
-        setUpComplete = false;
+        setupComplete = false;
         units = new List<Unit>();
-        movePreview = new List<TileInfo>();
-        pathable = new List<TileInfo>();
-        path = new List<TileInfo>();
+        structures = new List<Structure>();
+        resources = 0;
         posX = -1;
         posY = -1;
         isMyTurn = false;
+        numBases = 0;
         shiftMove = false;
         heldMoving = false;
         heldMove = false;
@@ -59,71 +65,142 @@ public class PlayerController : NetworkBehaviour
         rightRepeat = false;
         downRepeat = false;
         enterRepeat = false;
+        backRepeat = false;
+        rightMouseRepeat = false;
+        mouseDragHeld = false;
+        StartCoroutine(Setup());
     }
 
     // Update Function
     private void Update()
     {
-        if (setUpComplete && Runner.LocalPlayer == playerRef && gameManager.GetPlayerTurn() == playerNum)  // Only detect the correct player's input
+        if (setupComplete)  
         {
-            Shift(Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift));
-            AnyDirection(Input.GetKey(KeyCode.W), Input.GetKey(KeyCode.A), Input.GetKey(KeyCode.D), Input.GetKey(KeyCode.S));
-            Up(Input.GetKey(KeyCode.W));
-            Left(Input.GetKey(KeyCode.A));
-            Right(Input.GetKey(KeyCode.D));
-            Down(Input.GetKey(KeyCode.S));
-            NetInputEnter(Input.GetKey(KeyCode.Return));
+            // Some mouse inputs can be done outside of the player's turn (Camera controls)
+            UpdateMousePos(Input.mousePosition);
+            RightMouse(Input.GetMouseButton(1));
+
+            if (Runner.LocalPlayer == playerRef && gameManager.GetPlayerTurn() == playerNum)  // Only detect the correct player's input
+            {
+                Shift(Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift));
+                AnyDirection(Input.GetKey(KeyCode.W) || Input.GetKey(KeyCode.UpArrow),
+                    Input.GetKey(KeyCode.A) || Input.GetKey(KeyCode.LeftArrow),
+                    Input.GetKey(KeyCode.D) || Input.GetKey(KeyCode.RightArrow),
+                    Input.GetKey(KeyCode.S) || Input.GetKey(KeyCode.DownArrow));
+                Up(Input.GetKey(KeyCode.W) || Input.GetKey(KeyCode.UpArrow));
+                Left(Input.GetKey(KeyCode.A) || Input.GetKey(KeyCode.LeftArrow));
+                Right(Input.GetKey(KeyCode.D) || Input.GetKey(KeyCode.RightArrow));
+                Down(Input.GetKey(KeyCode.S) || Input.GetKey(KeyCode.DownArrow));
+                Enter(Input.GetKey(KeyCode.Return) || Input.GetMouseButton(0));
+                Back(Input.GetKey(KeyCode.Backspace));
+            }
         }
     }
 
-    public override void FixedUpdateNetwork()
+    // Coroutines
+    private IEnumerator Setup()
     {
-        // Wait for map to spawn before accepting input
-        if (map == null)
+        // Wait for player to be set before setting other parts
+        while (playerRef == null || playerRef == PlayerRef.None) { yield return null; }
+
+        // Try to get a reference to the ui
+        while (ui == null)
         {
-            map = FindObjectOfType<MapInfo>();
+            ui = FindObjectOfType<BaseUI>();
+            yield return null;
         }
-        else if (gameManager == null)
+
+        // Try to get a reference to the game manager
+        while (gameManager == null)
         {
             gameManager = FindObjectOfType<GameManager>();
+
+            yield return null;
         }
-        else if (map.GetIsTilesSet() && !setUpComplete)
+
+        // Try to get a reference to the map and set the location of the cursor to 0, 0
+        while (map == null)
         {
-            ChangePos(0, 0);
-            ChangeCameraPosWithCursor();
-            setUpComplete = true;
+            MapInfo map_ = FindObjectOfType<MapInfo>();
+            if (map_ != null)
+            {
+                if (map_.SetupIsComplete())  // Wait until the map is set up
+                {
+                    map = map_;
+                    ChangePos(0, 0);
+                    ChangeCameraPosWithCursor();
+                }
+            }
+            
+            yield return null;
         }
-        /*  IF I WANT TO PUT NETWORK INPUTS IN THEY GO HERE
-        else if (GetInput(out InputData input))
-        {
-            //Shift(input.shift);
-            //AnyDirection(input.up, input.left, input.right, input.down);
-            //Up(input.up);
-            //Left(input.left);
-            //Right(input.right);
-            //Down(input.down);
-            //MousePosInput(input.mousePos);
-            //NetInputEnter(input.enter || input.leftMouse);
-        }*/
+
+        setupComplete = true;
     }
 
     // Public Functions
-    // Setters/Getters
+    // Setters
     public void SetPlayerNum(int playerNum_) { playerNum = playerNum_; }
     public void SetPlayerRef(PlayerRef playerRef_) { playerRef = playerRef_; }
+    // Getters
+    public bool SetupIsComplete() { return setupComplete; }
     public PlayerRef GetPlayerRef() { return playerRef; }
     public int GetPlayerNum() { return playerNum; }
     public bool GetIsMyTurn() { return isMyTurn; }
     public TileInfo GetCurTile() { return curTile; }
+    public int GetUnitInd(Unit unit_) { return units.IndexOf(unit_); }
+    public int GetStructureInd(Structure structure_) { return structures.IndexOf(structure_); }
+    public int GetResources() { return resources; }
+    public int GetNumBases() { return numBases; }
+
+    // Function for increasing resources
+    public void AddResources(int res)
+    {
+        resources += res;
+
+        Rpc_SetResources(resources);
+    }
+
+    public void SpendResources(int res)
+    {
+        resources -= res;
+
+        Rpc_SetResources(resources);
+    }
 
     // Functions to change the player's turn
-    public void StartTurn()
+    [Rpc(RpcSources.All, RpcTargets.All)]
+    public void Rpc_StartTurn()
     {
-        Rpc_SetSprite(true);
-        Rpc_SetIsMyTurn(true);
+        // Reset all unit actions
+        foreach (Unit u in units)
+        {
+            u.StartTurn();
+        }
 
-        // TODO Create and display the move preview of a unit that the cursor is on
+        // Reset all structure actions
+        int numSaturated = 0;
+        foreach (Structure s in structures)
+        {
+            s.StartTurn();
 
+            if (s.IsSaturated())  // Should only be true for bases that have max gatherers (false for all non-base structures)
+            {
+                numSaturated++;
+            }
+        }
+
+        if (Runner.LocalPlayer == playerRef)
+        {
+            if (numSaturated == 5)
+            {
+                gameManager.PlayerWon(playerNum);
+            }
+
+            SetSprite(true);
+        }
+
+        isMyTurn = true;
     }
 
     public void EndTurn()
@@ -131,16 +208,31 @@ public class PlayerController : NetworkBehaviour
         Rpc_SetSprite(false);
         Rpc_SetIsMyTurn(false);
 
-        // TODO Back out of any chain of selections
-
-        // Remove the move preview
-        MovePreviewDestroy();
+        // Back out of any chain of selections
+        DeselectAll();
 
         // Reset all unit's actions
         foreach (Unit u in units)
         {
-            u.ResetActions();
+            u.EndTurn();
         }
+
+        // Reset all structure actions
+        foreach (Structure s in structures)
+        {
+            s.EndTurn();
+        }
+
+        Rpc_ResetVision();
+    }
+
+    public void EndOfGame()
+    {
+        Rpc_SetSprite(false);
+        Rpc_SetIsMyTurn(false);
+
+        // Back out of any chain of selections
+        DeselectAll();
     }
 
     // Tells the game manager to end this players turn
@@ -152,10 +244,31 @@ public class PlayerController : NetworkBehaviour
         }
     }
 
+    // Number of base modifiers (for detecting a loss by no bases)
+    public void AddBase()
+    {
+        numBases++;
+    }
+
+    public void RemoveBase()
+    {
+        Rpc_SetNumBases(--numBases);
+
+        if (numBases <= 0)
+        {
+            gameManager.PlayerLost(playerNum);
+        }
+    }
+
     // Unit List Helpers
     public void AddUnit(Unit unit_)
     {
         Rpc_AddUnit(unit_);
+    }
+
+    public void AddStructure(Structure structure_)
+    {
+        Rpc_AddStructure(structure_);
     }
 
     // Private Functions
@@ -225,12 +338,23 @@ public class PlayerController : NetworkBehaviour
             if (!upRepeat || shiftMove || heldMove)
             {
                 upRepeat = true;
-                TileInfo tile = map.GetTile(posX, posY - 1);
-                if (tile != null)
+                // Navigate action menu
+                if (ui.isActionMenuActive())
                 {
-                    ChangePos(posX, posY - 1);
-                    ChangeCameraPosWithCursor();
+                    int selection = ui.ChangeSelection(false);
+                    if (unit != null) { unit.SelectAbilityPreview(selection); }
+                    else if (structure != null) { structure.SelectAbilityPreview(selection); }
                 }
+                else  // Change cursor position
+                {
+                    TileInfo tile = map.GetTile(posX, posY - 1);
+                    if (tile != null)
+                    {
+                        ChangePos(posX, posY - 1);
+                        ChangeCameraPosWithCursor();
+                    }
+                }
+                
             }
         }
         else
@@ -247,11 +371,19 @@ public class PlayerController : NetworkBehaviour
             if (!leftRepeat || shiftMove || heldMove)
             {
                 leftRepeat = true;
-                TileInfo tile = map.GetTile(posX - 1, posY);
-                if (tile != null)
+                // Navigate action menu
+                if (ui.isActionMenuActive())
                 {
-                    ChangePos(posX - 1, posY);
-                    ChangeCameraPosWithCursor();
+                    // Do nothing (Choices are vertically arranged)
+                }
+                else  // Change cursor position
+                {
+                    TileInfo tile = map.GetTile(posX - 1, posY);
+                    if (tile != null)
+                    {
+                        ChangePos(posX - 1, posY);
+                        ChangeCameraPosWithCursor();
+                    }
                 }
             }
         }
@@ -269,11 +401,19 @@ public class PlayerController : NetworkBehaviour
             if (!rightRepeat || shiftMove || heldMove)
             {
                 rightRepeat = true;
-                TileInfo tile = map.GetTile(posX + 1, posY);
-                if (tile != null)
+                // Navigate action menu
+                if (ui.isActionMenuActive())
                 {
-                    ChangePos(posX + 1, posY);
-                    ChangeCameraPosWithCursor();
+                    // Do nothing (Choices are vertically arranged)
+                }
+                else  // Change cursor position
+                {
+                    TileInfo tile = map.GetTile(posX + 1, posY);
+                    if (tile != null)
+                    {
+                        ChangePos(posX + 1, posY);
+                        ChangeCameraPosWithCursor();
+                    }
                 }
             }
         }
@@ -291,11 +431,21 @@ public class PlayerController : NetworkBehaviour
             if (!downRepeat || shiftMove || heldMove)
             {
                 downRepeat = true;
-                TileInfo tile = map.GetTile(posX, posY + 1);
-                if (tile != null)
+                // Navigate action menu
+                if (ui.isActionMenuActive())
                 {
-                    ChangePos(posX, posY + 1);
-                    ChangeCameraPosWithCursor();
+                    int selection = ui.ChangeSelection(true);
+                    if (unit != null) { unit.SelectAbilityPreview(selection); }
+                    else if (structure != null) { structure.SelectAbilityPreview(selection); }
+                }
+                else  // Change cursor position
+                {
+                    TileInfo tile = map.GetTile(posX, posY + 1);
+                    if (tile != null)
+                    {
+                        ChangePos(posX, posY + 1);
+                        ChangeCameraPosWithCursor();
+                    }
                 }
             }
         }
@@ -306,7 +456,7 @@ public class PlayerController : NetworkBehaviour
     }
 
     // Enter
-    private void NetInputEnter(bool pressed)
+    private void Enter(bool pressed)
     {
         if (pressed)
         {
@@ -317,13 +467,62 @@ public class PlayerController : NetworkBehaviour
                 {
                     if (map.GetTile(posX, posY) != null)
                     {
-                        if (unit == null)  // When in a default state open a list of actions
+                        if (ui.isActionMenuActive())  // Make a selection from the action menu
                         {
-                            SelectUnit();
+                            if (unit == null && structure == null)  // If we are in the Unit/Structure choice menu
+                            {
+                                if (ui.GetSelection() == 0)
+                                {
+                                    ui.RemoveActionMenu();
+                                    unit = map.GetTile(posX, posY).GetUnit();
+                                    Rpc_SetUnit(unit);
+                                    unit.SelectAbilityPreview(ui.CreateActionMenuForPPO(unit));
+                                }
+                                else
+                                {
+                                    ui.RemoveActionMenu();
+                                    structure = map.GetTile(posX, posY).GetStructure();
+                                    Rpc_SetStructure(structure);
+                                    structure.SelectAbilityPreview(ui.CreateActionMenuForPPO(structure));
+                                }
+                            }
+                            else if (unit != null)  // If a Unit's abilities are displayed
+                            {
+                                if (unit.SelectAbility(ui.GetSelection()))  // returns true if ability is done
+                                {
+                                    unit = null;
+                                    Rpc_SetUnit(unit);
+                                }
+                            }
+                            else if (structure != null)  // If a Structure's abilities are displayed
+                            {
+                                if (structure.SelectAbility(ui.GetSelection()))
+                                {
+                                    structure = null;
+                                    Rpc_SetStructure(structure);
+                                }
+                            }
                         }
-                        else  // When we have a unit selected
+                        else if (unit == null && structure == null)  // When in a default state open a list of actions
                         {
-                            MoveUnit();
+                            SelectTile();
+                        }  // If a unit or structure is selected and no menu is active, we are preparing to use an ability
+                        else if (unit != null)  // When we have a unit selected
+                        {
+                            if (unit.UseAbility(curTile))  // Attempt to use the units ability
+                            {
+                                // If the ability is completely performed, release the unit
+                                unit = null;
+                                Rpc_SetUnit(unit);
+                            }
+                        }
+                        else if (structure != null)
+                        {
+                            if (structure.UseAbility(curTile))
+                            {
+                                structure = null;
+                                Rpc_SetStructure(structure);
+                            }
                         }
                     }
                 }
@@ -335,61 +534,165 @@ public class PlayerController : NetworkBehaviour
         }
     }
 
-    private void SelectUnit()
+    // Backspace
+    private void Back(bool pressed)
+    {
+        // Back out of using abilities or menus
+        if (pressed)
+        {
+            if (!backRepeat)
+            {
+                backRepeat = true;
+                DeselectAll();
+            }
+        }
+        else
+        {
+            backRepeat = false;
+        }
+    }
+
+    // Mouse Input
+    // Right Mouse
+    private void RightMouse(bool pressed)
+    {
+        // Back out of using abilities or menus
+        if (pressed)
+        {
+            if (Runner.LocalPlayer == playerRef && gameManager.GetPlayerTurn() == playerNum &&  // Only detect the correct player's input
+                (ui.isActionMenuActive() || unit != null || structure != null))
+            {
+                if (!rightMouseRepeat)
+                {
+                    rightMouseRepeat = true;
+                    DeselectAll();
+                }
+            }
+            else if (!rightMouseRepeat)
+            {
+                mouseDragHeld = true;
+            }
+        }
+        else
+        {
+            rightMouseRepeat = false;
+            mouseDragHeld = false;
+        }
+    }
+
+    private void ResetMouseTile()
+    {
+        Vector2 mp = Input.mousePosition;
+        Vector3 worldPos = Camera.main.ScreenToWorldPoint(mp);
+        Vector3Int gridPos = map.GetCell(worldPos);
+        Vector3Int gamePos = map.ConvertGridPosToGamePos(gridPos);
+
+        mouseTile = map.GetTile(gamePos.x, gamePos.y);
+    }
+
+    private void UpdateMousePos(Vector2 mousePos)
+    {
+        if (!ui.isActionMenuActive())
+        {
+            if (mouseDragHeld && unit == null && structure == null)  // Move camera when holding right click
+            {
+                Vector3 worldPrevPos = Camera.main.ScreenToWorldPoint(mousePrevPos);
+                Vector3 worldPos = Camera.main.ScreenToWorldPoint(mousePos);
+                float top = map.GetTile(0, 0).GetWorldPos().y;
+                float left = map.GetTile(0, 0).GetWorldPos().x;
+                float right = map.GetTile(map.GetMaxX(), 0).GetWorldPos().x;
+                float bottom = map.GetTile(0, map.GetMaxY()).GetWorldPos().y;
+
+                Vector3 newPosition = new Vector3(Camera.main.transform.position.x + worldPrevPos.x - worldPos.x, Camera.main.transform.position.y + worldPrevPos.y - worldPos.y, -10f);
+                bool xValidPosition = true;
+                bool yValidPosition = true;
+                // Too far up
+                if (newPosition.y > top - 3.5f) { yValidPosition = false; }
+                if (newPosition.x < left + 7.4f) { xValidPosition = false; }
+                if (newPosition.x > right - 4.45f) { xValidPosition = false; }
+                if (newPosition.y < bottom + 3.5) { yValidPosition = false; }
+
+                if (xValidPosition && yValidPosition)
+                {
+                    Camera.main.transform.position = newPosition;
+                }
+                else if (xValidPosition)
+                {
+                    Camera.main.transform.position = new Vector3(newPosition.x, Camera.main.transform.position.y, -10f);
+                }
+                else if (yValidPosition)
+                {
+                    Camera.main.transform.position = new Vector3(Camera.main.transform.position.x, newPosition.y, -10f);
+                }
+            }
+            else if (Runner.LocalPlayer == playerRef && gameManager.GetPlayerTurn() == playerNum &&  // Only detect the correct player's input
+                    mousePos.x < 1600 && mousePos.y < 1080 && mousePos.x >= 0 && mousePos.y >= 0)  // Change position of game cursor while pointing into the game
+            {
+                Vector3 worldPos = Camera.main.ScreenToWorldPoint(mousePos);
+                Vector3Int gridPos = map.GetCell(worldPos);
+                Vector3Int gamePos = map.ConvertGridPosToGamePos(gridPos);
+
+                if (map.GetTile(gamePos.x, gamePos.y) != mouseTile)
+                {
+                    ChangePos(gamePos.x, gamePos.y);
+                    mouseTile = curTile;
+                }
+            }
+        }
+        else  // Change selection in the action menu
+        {
+            int selection = ui.ChangeSelectionMouse(mousePos);
+            if (unit != null) { unit.SelectAbilityPreview(selection); }
+            else if (structure != null) { structure.SelectAbilityPreview(selection); }
+        }
+
+        mousePrevPos = mousePos;
+    }
+
+    // Other Private Functions
+    private void SelectTile()
     {
         TileInfo tile = map.GetTile(posX, posY);
+        bool validUnit = false;
+        bool validStructure = false;
         if (tile.GetUnit() != null)
         {
-            if (tile.GetUnit().GetPlayerNum() == playerNum)
+            if (tile.GetUnit().GetPlayerNum() == playerNum && !tile.GetUnit().HasUsedAllActions())
             {
-                Rpc_SetUnitPrevTile(tile);
-                Rpc_SetUnit(tile.GetUnit());
-                foreach (TileInfo t in movePreview)
-                {
-                    pathable.Add(t);
-                }
-                PathableDisplay();
-                Rpc_AddToPath(tile);
-                PathDisplay();
+                validUnit = true;
             }
         }
-    }
-
-    private void MoveUnit()
-    {
-        unit.Move(path);
-        TileInfo tile = path[path.Count - 1];
-        unitPrevTile.Rpc_SetUnit(null);
-        Rpc_SetUnitPrevTile(null);
-        tile.Rpc_SetUnit(unit);
-        unit.Rpc_SetTransform(tile.GetWorldPos());
-        Rpc_SetUnit(null);
-        MovePreviewDestroy();
-        PathableDestroy();
-        PathDestroy();
-        
-        if (posX != -1)
+        if (tile.GetStructure() != null)
         {
-            if (map.GetTile(posX, posY).GetUnit() != null)
+            if (tile.GetStructure().GetPlayerNum() == playerNum && !tile.GetStructure().HasUsedAllActions())
             {
-                if (!map.GetTile(posX, posY).GetUnit().HasMoved())
-                {
-                    movePreview = map.GetTilesInMoveRange(posX, posY, map.GetTile(posX, posY).GetUnit());
-                    MovePreviewDisplay();
-                }
+                validStructure = true;
             }
+        }
+
+        if (validUnit && validStructure)
+        {
+            // Create a menu for selecting either the unit or the structure
+            ui.CreateUnitStructureMenu(tile);
+        }
+        else if (validUnit)
+        {
+            unit = tile.GetUnit();
+            Rpc_SetUnit(unit);
+
+            // Open the action menu
+            unit.SelectAbilityPreview(ui.CreateActionMenuForPPO(tile.GetUnit()));
+        }
+        else if (validStructure)
+        {
+            structure = tile.GetStructure();
+            Rpc_SetStructure(structure);
+
+            // Open the action menu
+            structure.SelectAbilityPreview(ui.CreateActionMenuForPPO(tile.GetStructure()));
         }
     }
 
-    // Mouse Movement
-    private void MousePosInput(Vector2 mousePos)
-    {
-        Vector3Int gridPos = map.GetCell(mousePos);
-        Vector3Int mapPos = map.ConvertGridPosToGamePos(gridPos);
-        ChangePos(mapPos.x, mapPos.y);
-    }
-
-    // Other private functions
     // Change position of cursor on the map
     private void ChangePos(int x, int y)
     {
@@ -399,9 +702,6 @@ public class PlayerController : NetworkBehaviour
             return;
         }
 
-        // When changing positions, remove the previous move preview from the screen
-        if (unit == null) { MovePreviewDestroy(); }
-
         // If trying to move off the map, do not change the position just return
         if (map.GetTile(x, y) == null)
         {
@@ -409,255 +709,48 @@ public class PlayerController : NetworkBehaviour
         }
         else
         {
-            // When we are moving a unit, set pathing information
-            if (unit != null && movePreview.Contains(map.GetTile(x, y)))
-            {
-                bool directlyPathable = false;
-                // First checks if the new position is adjacent and isn't already in the path
-                if (((x == path[path.Count - 1].GetPosX() && (y == path[path.Count - 1].GetPosY() - 1 || y == path[path.Count - 1].GetPosY() + 1))
-                    || (y == path[path.Count - 1].GetPosY() && (x == path[path.Count - 1].GetPosX() - 1 || x == path[path.Count - 1].GetPosX() + 1)))
-                    && !path.Contains(map.GetTile(x, y))
-                    && pathable.Contains(map.GetTile(x, y)))
-                {
-                    directlyPathable = map.IsPathable(map.GetTile(posX, posY), map.GetTile(x, y), unit);
-                }
-
-                // Change position of the cursor early for pathing functions
-                posX = x;
-                posY = y;
-                // Then either retrace 1 step in the path, continue the path, or rebuild the path
-                bool pathAltered = false;
-                if (path.Count > 1)
-                {
-                    if (path[path.Count - 2] == map.GetTile(x, y))
-                    {
-                        path[path.Count - 1].RemovePath();
-                        Rpc_RemoveFromPath(path[path.Count - 1]);
-                        pathAltered = true;
-                    }
-                }
-                if (directlyPathable && !pathAltered)
-                {
-                    Rpc_AddToPath(map.GetTile(x, y));
-                }
-                else if (!pathAltered)
-                {
-                    AutoBuildPath();
-                }
-
-                PathDisplay();
-
-                // With the path created, find the remaining pathable zone you can reach if there is any
-                PathableDestroy();
-                List<TileInfo> p = new List<TileInfo>();
-                for (int i = 0; i < path.Count; i++)
-                {
-                    p.Add(path[i]);
-                }
-                pathable = map.GetTilesInMoveRange(x, y, unit, p);
-                MovePreviewDisplay();
-                PathableDisplay();
-            }
-
             // Change position of the cursor
             posX = x;
             posY = y;
+            curTile = map.GetTile(posX, posY);  // Set a reference to the current tile at the cursor's position
+
             transform.position = map.GetTile(x, y).GetWorldPos();
 
-            // If there is a friendly unit here, display a preview of it's move range
-            if (map.GetTile(x, y).GetUnit() != null && unit == null)
+            // When we have a unit selected, display ability information appropriately
+            if (unit != null)
             {
-                if (map.GetTile(x, y).GetUnit().GetPlayerNum() == playerNum && !map.GetTile(x, y).GetUnit().HasMoved())
-                {
-                    movePreview = map.GetTilesInMoveRange(x, y, map.GetTile(x, y).GetUnit());
-                    MovePreviewDisplay();
-                }
+                unit.ChangePosAbility(curTile);
             }
-        }
-
-        // Set a reference to the current tile at the cursor's position
-        if (posX != -1)
-        {
-            curTile = map.GetTile(posX, posY);
-        }
-    }
-
-    // Function made for building a path automatically based on the position of the cursor
-    private void AutoBuildPath()
-    {
-        TileInfo startTile = path[0];
-        PathDestroy();
-
-        if (startTile != map.GetTile(posX, posY))
-        {
-            List<TileInfo> p = map.BuildPath(startTile, map.GetTile(posX, posY), unit);
-            foreach (TileInfo t in p)
+            else if (structure != null)
             {
-                Rpc_AddToPath(t);
-            }
-        }
-        else
-        {
-            Rpc_AddToPath(startTile);
-        }
-    }
-
-    // Highlight Handlers
-    private void MovePreviewDestroy()
-    {
-        for (int i = 0; i < movePreview.Count; i++)
-        {
-            movePreview[i].DisableHighlight();
-        }
-
-        movePreview.Clear();
-    }
-
-    private void PathableDestroy()
-    {
-        for (int i = 0; i < pathable.Count; i++)
-        {
-            pathable[i].DisableHighlight();
-        }
-
-        pathable.Clear();
-    }
-
-    private void PathDestroy()
-    {
-        for (int i = 0; i < path.Count; i++)
-        {
-            path[i].RemovePath();
-        }
-
-        Rpc_ClearPath();
-    }
-
-    private void MovePreviewDisplay()
-    {
-        for (int i = 0; i < movePreview.Count; i++)
-        {
-            movePreview[i].EnableHighlightPathable(playerRef);
-        }
-    }
-
-    private void PathableDisplay()
-    {
-        for (int i = 0; i < pathable.Count; i++)
-        {
-            pathable[i].EnableHighlightImmediatelyPathable(playerRef);
-        }
-    }
-
-    private void PathDisplay()
-    {
-        // First clear the previous path's images
-        foreach (TileInfo p in path)
-        {
-            p.RemovePath();
-        }
-
-        // Special case for a path of only size 1
-        if (path.Count == 1)
-        {
-            path[0].DisplayPath(playerRef, "Start");
-        }
-        else
-        {
-            // Display the entire path
-            for (int i = 0; i < path.Count; i++)
-            {
-                int presX = path[i].GetPosX();
-                int presY = path[i].GetPosY();
-                if (i == 0)  // The first tile in the path
-                {
-                    int postX = path[i + 1].GetPosX();
-                    int postY = path[i + 1].GetPosY();
-                    if (postY < presY)
-                    {
-                        path[i].DisplayPath(playerRef, "ConnectUp");
-                    }
-                    else if (postX < presX)
-                    {
-                        path[i].DisplayPath(playerRef, "ConnectLeft");
-                    }
-                    else if (postX > presX)
-                    {
-                        path[i].DisplayPath(playerRef, "ConnectRight");
-                    }
-                    else if (postY > presY)
-                    {
-                        path[i].DisplayPath(playerRef, "ConnectDown");
-                    }
-                    else
-                    {
-                        path[i].DisplayPath(playerRef, "Start");
-                    }
-                }
-                else if (i == path.Count - 1)  // The last tile in the path
-                {
-                    int prevX = path[i - 1].GetPosX();
-                    int prevY = path[i - 1].GetPosY();
-                    if (prevY > presY)
-                    {
-                        path[i].DisplayPath(playerRef, "ArriveFromBelow");
-                    }
-                    else if (prevX > presX)
-                    {
-                        path[i].DisplayPath(playerRef, "ArriveFromRight");
-                    }
-                    else if (prevX < presX)
-                    {
-                        path[i].DisplayPath(playerRef, "ArriveFromLeft");
-                    }
-                    else if (prevY < presY)
-                    {
-                        path[i].DisplayPath(playerRef, "ArriveFromAbove");
-                    }
-                    else
-                    {
-                        path[i].DisplayPath(playerRef, "Start");
-                    }
-                }
-                else  // Tiles in the middle of the path
-                {
-                    int prevX = path[i - 1].GetPosX();
-                    int prevY = path[i - 1].GetPosY();
-                    int postX = path[i + 1].GetPosX();
-                    int postY = path[i + 1].GetPosY();
-                    if ((prevY < presY && postX < presX) || (prevX < presX && postY < presY))
-                    {
-                        path[i].DisplayPath(playerRef, "ConnectUpLeft");
-                    }
-                    else if ((prevY < presY && postX > presX) || (prevX > presX && postY < presY))
-                    {
-                        path[i].DisplayPath(playerRef, "ConnectUpRight");
-                    }
-                    else if ((prevY < presY && postY > presY) || (prevY > presY && postY < presY))
-                    {
-                        path[i].DisplayPath(playerRef, "ConnectUpDown");
-                    }
-                    else if ((prevX < presX && postX > presX) || (prevX > presX && postX < presX))
-                    {
-                        path[i].DisplayPath(playerRef, "ConnectLeftRight");
-                    }
-                    else if ((prevX < presX && postY > presY) || (prevY > presY && postX < presX))
-                    {
-                        path[i].DisplayPath(playerRef, "ConnectLeftDown");
-                    }
-                    else if ((prevX > presX && postY > presY) || (prevY > presY && postX > presX))
-                    {
-                        path[i].DisplayPath(playerRef, "ConnectRightDown");
-                    }
-                    else
-                    {
-                        path[i].DisplayPath(playerRef, "Start");
-                    }
-                }
+                structure.ChangePosAbility(curTile);
             }
         }
     }
 
+    // Deselection
+    private void DeselectAll()
+    {
+        if (ui.isActionMenuActive())  // When looking at a menu
+        {
+            ui.RemoveActionMenu();
+        }
+
+        if (unit != null)  // When a unit is selected
+        {
+            unit.Deselect();
+            unit = null;
+            Rpc_SetUnit(unit);
+        }
+        
+        if (structure != null)
+        {
+            structure.Deselect();
+            structure = null;
+            Rpc_SetStructure(structure);
+        }
+    }
+    
     // Camera functions
     private void ChangeCameraPosWithCursor()
     {
@@ -669,23 +762,31 @@ public class PlayerController : NetworkBehaviour
         // Cursor too far up
         if (Camera.main.transform.position.y - 3.5f > map.GetTile(posX, posY).GetWorldPos().y)
         {
-            Camera.main.transform.position = new Vector3(Camera.main.transform.position.x, map.GetTile(posX, posY).GetWorldPos().y + 3.5f, -10);
+            Camera.main.transform.position = new Vector3(Camera.main.transform.position.x, map.GetTile(posX, posY).GetWorldPos().y + 3.5f, -10f);
         }  // Cursor too far left
         if (Camera.main.transform.position.x - 7.4f > map.GetTile(posX, posY).GetWorldPos().x)
         {
-            Camera.main.transform.position = new Vector3(map.GetTile(posX, posY).GetWorldPos().x + 7.4f, Camera.main.transform.position.y, -10);
+            Camera.main.transform.position = new Vector3(map.GetTile(posX, posY).GetWorldPos().x + 7.4f, Camera.main.transform.position.y, -10f);
         }  // Cursor too far right
-        if (Camera.main.transform.position.x + 4.4f < map.GetTile(posX, posY).GetWorldPos().x)
+        if (Camera.main.transform.position.x + 4.45f < map.GetTile(posX, posY).GetWorldPos().x)
         {
-            Camera.main.transform.position = new Vector3(map.GetTile(posX, posY).GetWorldPos().x - 4.4f, Camera.main.transform.position.y, -10);
+            Camera.main.transform.position = new Vector3(map.GetTile(posX, posY).GetWorldPos().x - 4.45f, Camera.main.transform.position.y, -10f);
         }  // Cursor too far down
         if (Camera.main.transform.position.y + 3.5f < map.GetTile(posX, posY).GetWorldPos().y)
         {
-            Camera.main.transform.position = new Vector3(Camera.main.transform.position.x, map.GetTile(posX, posY).GetWorldPos().y - 3.5f, -10);
+            Camera.main.transform.position = new Vector3(Camera.main.transform.position.x, map.GetTile(posX, posY).GetWorldPos().y - 3.5f, -10f);
         }
+        // If the camera moved, the mouse's tile may have changed as well
+        ResetMouseTile();
     }
 
     // RPC Functions
+    [Rpc(RpcSources.All, RpcTargets.All)]
+    private void Rpc_SetResources(int res)
+    {
+        resources = res;
+    }
+
     [Rpc(RpcSources.All, RpcTargets.All)]
     private void Rpc_SetIsMyTurn(bool isMyTurn_)
     {
@@ -702,7 +803,49 @@ public class PlayerController : NetworkBehaviour
         }
     }
 
+    private void SetSprite(bool isOn)
+    {
+        GetComponent<SpriteRenderer>().enabled = isOn;
+    }
+
+    // Reset the vision
+    [Rpc(RpcSources.All, RpcTargets.All)]
+    public void Rpc_ResetVision()
+    {
+        if (Runner.LocalPlayer == playerRef)
+        {
+            map.CoverMapInFog();
+
+            foreach (Unit u in units)
+            {
+                u.DisableFogByVision();
+            }
+            foreach (Structure s in structures)
+            {
+                s.DisableFogByVision();
+            }
+        }
+    }
+
     // Unit setters
+    [Rpc(RpcSources.All, RpcTargets.All)]
+    public void Rpc_ResetUnitList()
+    {
+        units.Clear();
+        Unit[] units_ = FindObjectsOfType<Unit>();
+
+        foreach (Unit u in units_)
+        {
+            if (!u.IsDestroyed())
+            {
+                if (playerNum == u.GetPlayerNum())
+                {
+                    units.Add(u);
+                }
+            }
+        }
+    }
+
     [Rpc(RpcSources.All, RpcTargets.All)]
     private void Rpc_SetUnit(Unit unit_)
     {
@@ -710,39 +853,85 @@ public class PlayerController : NetworkBehaviour
     }
 
     [Rpc(RpcSources.All, RpcTargets.All)]
-    private void Rpc_SetUnitPrevTile(TileInfo tile)
-    {
-        unitPrevTile = tile;
-    }
-
-    [Rpc(RpcSources.All, RpcTargets.All)]
     private void Rpc_AddUnit(Unit unit_)
     {
         units.Add(unit_);
+
+        if (Runner.LocalPlayer == playerRef)
+        {
+            unit_.EnableSprite(true);
+        }
     }
 
     [Rpc(RpcSources.All, RpcTargets.All)]
-    private void Rpc_RemoveUnit(Unit unit_)
+    public void Rpc_RemoveUnit(Unit unit_)
     {
         units.Remove(unit_);
     }
 
-    // Path manipulation
     [Rpc(RpcSources.All, RpcTargets.All)]
-    private void Rpc_AddToPath(TileInfo tile)
+    public void Rpc_RemoveUnitAt(int index)
     {
-        path.Add(tile);
+        units.RemoveAt(index);
     }
 
     [Rpc(RpcSources.All, RpcTargets.All)]
-    private void Rpc_RemoveFromPath(TileInfo tile)
+    public void Rpc_RemoveNullUnits()
     {
-        path.Remove(tile);
+        units.RemoveAll(null);
+    }
+
+    // Structure setters
+    [Rpc(RpcSources.All, RpcTargets.All)]
+    public void Rpc_ResetStructureList()
+    {
+        structures.Clear();
+        Structure[] structures_ = FindObjectsOfType<Structure>();
+
+        foreach (Structure s in structures_)
+        {
+            if (!s.IsDestroyed())
+            {
+                if (playerNum == s.GetPlayerNum())
+                {
+                    structures.Add(s);
+                }
+            }
+        }
     }
 
     [Rpc(RpcSources.All, RpcTargets.All)]
-    private void Rpc_ClearPath()
+    private void Rpc_SetStructure(Structure structure_)
     {
-        path.Clear();
+        structure = structure_;
+    }
+
+    [Rpc(RpcSources.All, RpcTargets.All)]
+    private void Rpc_AddStructure(Structure structure_)
+    {
+        structures.Add(structure_);
+
+        if (Runner.LocalPlayer == playerRef)
+        {
+            structure_.EnableSprite(true);
+        }
+    }
+
+    [Rpc(RpcSources.All, RpcTargets.All)]
+    private void Rpc_RemoveStructure(Structure structure_)
+    {
+        structures.Remove(structure_);
+    }
+
+    [Rpc(RpcSources.All, RpcTargets.All)]
+    public void Rpc_RemoveStructureAt(int index)
+    {
+        structures.RemoveAt(index);
+    }
+
+    [Rpc(RpcSources.All, RpcTargets.All)]
+    public void Rpc_SetNumBases(int num)
+    {
+        numBases = num;
     }
 }

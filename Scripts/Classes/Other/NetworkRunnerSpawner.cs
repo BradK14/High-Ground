@@ -9,15 +9,17 @@ public class NetworkRunnerSpawner : MonoBehaviour, INetworkRunnerCallbacks
 {
     // Variables
     // Initialized in the inspector
+    [SerializeField] private BaseUI ui;
     [SerializeField] private GameManager gameManagerPrefab;
     [SerializeField] private NetworkPrefabRef playerPrefab;
     [SerializeField] private MapInfo mapPrefab;
     // Initialized at the start
     private Dictionary<PlayerRef, NetworkObject> players = new Dictionary<PlayerRef, NetworkObject>();
-    private Dictionary<int, PlayerRef> playerNums = new Dictionary<int, PlayerRef>();
+    private Dictionary<PlayerRef, int> playerNums = new Dictionary<PlayerRef, int>();
     // Initialized at run time
     private NetworkRunner _runner;
     private bool leftMouse;
+    private GameManager gameManager;
 
     // Functions
     // INetworkRunnerCallbacks must include these functions
@@ -27,19 +29,22 @@ public class NetworkRunnerSpawner : MonoBehaviour, INetworkRunnerCallbacks
         {
             NetworkObject networkPlayerObject = runner.Spawn(playerPrefab, new Vector3(0, 0, 0), Quaternion.identity, player);  // Create the player's controller (where the input goes)
             players.Add(player, networkPlayerObject);
-            playerNums.Add(players.Count, player);
+            playerNums.Add(player, players.Count);
             networkPlayerObject.GetComponent<PlayerController>().SetPlayerNum(players.Count);  // Set which player it is (player 1 for host or 2 for the client)
             networkPlayerObject.GetComponent<PlayerController>().SetPlayerRef(player);  // A reference to help with local differentiation using Networked on changed
             // When all players are present, spawn the map and game manager to begin the game.
             if (players.Count == runner.SessionInfo.MaxPlayers)
             {
-                runner.Spawn(gameManagerPrefab);
+                gameManager = runner.Spawn(gameManagerPrefab);
                 runner.Spawn(mapPrefab);
             }
         }
     }
 
-    public void OnPlayerLeft(NetworkRunner runner, PlayerRef player) { }
+    public void OnPlayerLeft(NetworkRunner runner, PlayerRef player)
+    {
+        gameManager.PlayerLost(playerNums[player]);
+    }
 
     public void OnInput(NetworkRunner runner, NetworkInput input)
     {        
@@ -82,7 +87,10 @@ public class NetworkRunnerSpawner : MonoBehaviour, INetworkRunnerCallbacks
     }
 
     public void OnInputMissing(NetworkRunner runner, PlayerRef player, NetworkInput input) { }
-    public void OnShutdown(NetworkRunner runner, ShutdownReason shutdownReason) { }
+    public void OnShutdown(NetworkRunner runner, ShutdownReason shutdownReason)
+    {
+        ui.DisplayVictoryDefeat(true);
+    }
     public void OnConnectedToServer(NetworkRunner runner) { }
     public void OnDisconnectedFromServer(NetworkRunner runner) { }
     public void OnConnectRequest(NetworkRunner runner, NetworkRunnerCallbackArgs.ConnectRequest request, byte[] token) { }
@@ -110,6 +118,11 @@ public class NetworkRunnerSpawner : MonoBehaviour, INetworkRunnerCallbacks
             if (GUI.Button(new Rect(Screen.width / 2 - buttonWidth / 2, Screen.height / 2 - buttonHeight / 2 + buttonHeight, buttonWidth, buttonHeight), "Join"))
             {
                 StartGame(GameMode.Client);
+            }
+
+            if (GUI.Button(new Rect(Screen.width / 2 - buttonWidth / 2, Screen.height - buttonHeight / 2 - buttonHeight * 2, buttonWidth, buttonHeight), "Quit"))
+            {
+                Application.Quit();
             }
         }
     }

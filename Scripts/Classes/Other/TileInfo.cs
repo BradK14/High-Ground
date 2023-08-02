@@ -7,9 +7,25 @@ public class TileInfo : NetworkBehaviour
 {
     // Variables
     // Initialized in the inspector
-    [SerializeField] private Unit testUnitPrefab;  // TODO: Move this to mapInfo, and pass a spawned unit to this instead of its name.
-    [SerializeField] private NetworkObject pathPrefab;
-    [SerializeField] private SpriteRenderer spriteRenderer;
+    [SerializeField] private Unit testUnitPrefab;
+    [SerializeField] private Unit builderPrefab;
+    [SerializeField] private Unit scoutPrefab;
+    [SerializeField] private Unit fighterAPrefab;
+    [SerializeField] private Unit fighterBPrefab;
+    [SerializeField] private Unit supportPrefab;
+    [SerializeField] private Unit harasserPrefab;
+    [SerializeField] private Unit destroyerPrefab;
+    [SerializeField] private Unit powerhousePrefab;
+    [SerializeField] private Structure testStructurePrefab;
+    [SerializeField] private Structure basePrefab;
+    [SerializeField] private Structure productionAPrefab;
+    [SerializeField] private Structure productionBPrefab;
+    [SerializeField] private Structure wallPrefab;
+    [SerializeField] private Structure staticDefensePrefab;
+    [SerializeField] private Structure constructionSitePrefab;
+    [SerializeField] private NetworkObject indicatorPrefab;
+    [SerializeField] private SpriteRenderer highlightRenderer;
+    [SerializeField] private SpriteRenderer fogRenderer;
     [SerializeField] private Sprite pathStart;
     [SerializeField] private Sprite pathConnectUp;
     [SerializeField] private Sprite pathConnectLeft;
@@ -26,10 +42,14 @@ public class TileInfo : NetworkBehaviour
     [SerializeField] private Sprite pathArriveFromLeft;
     [SerializeField] private Sprite pathArriveFromAbove;
     // Initialized on spawn
-    [Networked] private NetworkObject path { get; set; }
+    [Networked] private NetworkObject indicator { get; set; }
+    [Networked] private int resources { get; set; }
+    private bool settingUpUnit;
+    private bool settingUpStructure;
+    private bool settingUpConstructionSite;
     // Initialized at run time
-    //[Networked] private Resources resources { get; set; }
-    //[Networked] private Structure structure { get; set; }
+    [Networked] private bool hasResources { get; set; }
+    [Networked] private Structure structure { get; set; }
     [Networked] private Unit unit { get; set; }
     [Networked] private int posX { get; set; }
     [Networked] private int posY { get; set; }
@@ -39,16 +59,55 @@ public class TileInfo : NetworkBehaviour
     [Networked] private bool cliffLeft { get; set; }
     [Networked] private bool cliffRight { get; set; }
     [Networked] private bool cliffDown { get; set; }
+    private string uNameToSpawn;
+    private string sNameToSpawn;
+    private string cSNameToSpawn;
+    private int uPNumToSpawn;
+    private int sPNumToSpawn;
+    private int cSPNumToSpawn;
+    private Unit cSBuilder;
 
     // Functions
     // Start Function
     public override void Spawned()
     {
-        path = Runner.Spawn(pathPrefab);
+        indicator = Runner.Spawn(indicatorPrefab);
+        hasResources = false;
+        resources = 0;
+        settingUpUnit = false;
+        settingUpStructure = false;
+        settingUpConstructionSite = false;
+}
+
+    // Update Function (for spawning units or structures)
+    public override void FixedUpdateNetwork()
+    {
+        if (Runner.IsServer)
+        {
+            if (settingUpUnit)
+            {
+                SetUnitByName(uNameToSpawn, uPNumToSpawn);
+                settingUpUnit = false;
+            }
+
+            if (settingUpStructure)
+            {
+                SetStructureByName(sNameToSpawn, sPNumToSpawn);
+                settingUpStructure = false;
+            }
+
+            if (settingUpConstructionSite)
+            {
+                SetConstructionSiteByName(cSNameToSpawn, cSPNumToSpawn, cSBuilder);
+                settingUpConstructionSite = false;
+            }
+        }
     }
 
     // Public Functions
-    // Setters/Getters
+    // Getters
+    public bool HasResources() { return hasResources; }
+    public int GetResources() { return resources; }
     public int GetPosX() { return posX; }
     public int GetPosY() { return posY; }
     public Vector3 GetWorldPos() { return worldPos; }
@@ -58,9 +117,14 @@ public class TileInfo : NetworkBehaviour
     public bool GetCliffRight() { return cliffRight; }
     public bool GetCliffDown() { return cliffDown; }
     public Unit GetUnit() { return unit; }
+    public Structure GetStructure() { return structure; }
+    // Setters
     public void SetUnit(Unit unit_) { unit = unit_; }
     [Rpc(RpcSources.All, RpcTargets.All)]
     public void Rpc_SetUnit(Unit unit_) { unit = unit_; }
+    [Rpc(RpcSources.All, RpcTargets.All)]
+    public void Rpc_SetStructure(Structure structure_) { structure = structure_; }
+    public bool GetFog() { return fogRenderer.enabled; }
 
     // Initializors
     // Position information
@@ -70,10 +134,24 @@ public class TileInfo : NetworkBehaviour
         posY = posY_;
         worldPos = worldPos_;
         transform.position = worldPos;
-        path.transform.position = worldPos;
+        indicator.transform.position = worldPos;
     }
 
     // Information dependent on the sprites drawn on the map is gathered by the name of the sprite
+    // Resources
+    public void SetResources(bool hasResources_)
+    {
+        hasResources = hasResources_;
+
+        if (hasResources_)
+        {
+            resources = 100;
+        }
+        else
+        {
+            resources = 0;
+        }
+    }
     // Elevation information
     public void SetElevationByName(string groundName)
     {
@@ -176,106 +254,293 @@ public class TileInfo : NetworkBehaviour
     }
 
     // Unit information
-    public void SetUnitByName(string unitName)
+    public void SetUnitByName(string unitName, int unitPNum)
     {
         unit = null;
+
         switch (unitName)
         {
-            case "TestUnit1":
+            case "TestUnit":
                 unit = Runner.Spawn(testUnitPrefab, GetWorldPos());
-                unit.SetPlayerNum(1);
                 break;
-            case "TestUnit2":
-                unit = Runner.Spawn(testUnitPrefab, GetWorldPos());
-                unit.SetPlayerNum(2);
+            case "Builder":
+                unit = Runner.Spawn(builderPrefab, GetWorldPos());
+                break;
+            case "Scout":
+                unit = Runner.Spawn(scoutPrefab, GetWorldPos());
+                break;
+            case "FighterA":
+                unit = Runner.Spawn(fighterAPrefab, GetWorldPos());
+                break;
+            case "FighterB":
+                unit = Runner.Spawn(fighterBPrefab, GetWorldPos());
+                break;
+            case "Support":
+                unit = Runner.Spawn(supportPrefab, GetWorldPos());
+                break;
+            case "Harasser":
+                unit = Runner.Spawn(harasserPrefab, GetWorldPos());
+                break;
+            case "Destroyer":
+                unit = Runner.Spawn(destroyerPrefab, GetWorldPos());
+                break;
+            case "Powerhouse":
+                unit = Runner.Spawn(powerhousePrefab, GetWorldPos());
                 break;
         }
+
+        // Do all the remaining set up for the unit and this tile
+        if (unit != null)
+        {
+            unit.SetPlayerNum(unitPNum);  // Set it to it's appropriate player
+            unit.SetCurTile(this);
+            unit.Rpc_RevealIfSeen();
+        }
+    }
+
+    // Structure information
+    public void SetStructureByName(string structureName, int structurePNum)
+    {
+        structure = null;
+        switch (structureName)
+        {
+            case "TestStructure":
+                structure = Runner.Spawn(testStructurePrefab, GetWorldPos());
+                break;
+            case "Base":
+                structure = Runner.Spawn(basePrefab, GetWorldPos());
+                break;
+            case "ProductionA":
+                structure = Runner.Spawn(productionAPrefab, GetWorldPos());
+                break;
+            case "ProductionB":
+                structure = Runner.Spawn(productionBPrefab, GetWorldPos());
+                break;
+            case "Wall":
+                structure = Runner.Spawn(wallPrefab, GetWorldPos());
+                break;
+            case "StaticDefense":
+                structure = Runner.Spawn(staticDefensePrefab, GetWorldPos());
+                break;
+        }
+
+        if (structure != null)
+        {
+            structure.SetPlayerNum(structurePNum);
+            structure.SetCurTile(this);
+            structure.Rpc_RevealIfSeen();
+        }
+    }
+
+    public void SetConstructionSiteByName(string cSName, int cSPNum, Unit builder)
+    {
+        structure = Runner.Spawn(constructionSitePrefab, GetWorldPos());
+
+        structure.SetPlayerNum(cSPNum);
+        structure.SetCurTile(this);
+
+        structure.Rpc_SetCSName(cSName);
+        structure.Rpc_SetCSBuilder(builder);
+
+        builder.Rpc_SetCS(structure);
+        
+        structure.Rpc_RevealIfSeen();
     }
 
     // Highlight Handlers
     public void DisableHighlight()
     {
-        spriteRenderer.enabled = false;
+        highlightRenderer.enabled = false;
     }
 
-    public void EnableHighlightPathable(PlayerRef player)
+    public void EnableHighlightMoveable(PlayerRef player)
     {
-        spriteRenderer.color = new Vector4(0.5f, 0.5f, 1f, 0.25f);
+        highlightRenderer.color = new Vector4(0.5f, 0.5f, 1f, 0.25f);
         if (Runner.LocalPlayer == player)
         {
-            spriteRenderer.enabled = true;
+            highlightRenderer.enabled = true;
         }
     }
 
-    public void EnableHighlightImmediatelyPathable(PlayerRef player)
+    public void EnableThickHighlightMoveable(PlayerRef player)
     {
-        spriteRenderer.color = new Vector4(0.5f, 0.5f, 1f, 0.5f);
+        highlightRenderer.color = new Vector4(0.5f, 0.5f, 1f, 0.5f);
         if (Runner.LocalPlayer == player)
         {
-            spriteRenderer.enabled = true;
+            highlightRenderer.enabled = true;
         }
     }
 
-    // Path Handlers
-    public void RemovePath()
+    public void EnableHighlightAttackable(PlayerRef player)
     {
-        path.GetComponent<SpriteRenderer>().enabled = false;
+        highlightRenderer.color = new Vector4(1f, 0.5f, 0.5f, 0.5f);
+        if (Runner.LocalPlayer == player)
+        {
+            highlightRenderer.enabled = true;
+        }
     }
 
-    public void DisplayPath(PlayerRef player, string pathType)
+    public void EnableThickHighlightAttackable(PlayerRef player)
     {
-        switch (pathType)
+        highlightRenderer.color = new Vector4(1f, 0.5f, 0.5f, 0.75f);
+        if (Runner.LocalPlayer == player)
         {
-            case "Start":
-                path.GetComponent<SpriteRenderer>().sprite = pathStart;
-                break;
+            highlightRenderer.enabled = true;
+        }
+    }
+    public void EnableHighlightSupportable(PlayerRef player)
+    {
+        highlightRenderer.color = new Vector4(0.5f, 1f, 0.5f, 0.5f);
+        if (Runner.LocalPlayer == player)
+        {
+            highlightRenderer.enabled = true;
+        }
+    }
+
+    public void EnableThickHighlightSupportable(PlayerRef player)
+    {
+        highlightRenderer.color = new Vector4(0.5f, 1f, 0.5f, 0.75f);
+        if (Runner.LocalPlayer == player)
+        {
+            highlightRenderer.enabled = true;
+        }
+    }
+
+    // Fog Handlers
+    public void DisableFog()
+    {
+        fogRenderer.enabled = false;
+        if (unit != null)
+        {
+            unit.EnableSprite(true);
+        }
+        if (structure != null)
+        {
+            structure.EnableSprite(true);
+        }
+    }
+
+    public void EnableFog()
+    {
+        fogRenderer.enabled = true;
+        if (unit != null)
+        {
+            unit.EnableSprite(false);
+        }
+    }
+
+    // Indicator Handlers
+    public void RemoveIndicator()
+    {
+        indicator.GetComponent<SpriteRenderer>().enabled = false;
+    }
+
+    public void DisplayIndicator(PlayerRef player, string indicatorType)
+    {
+        switch (indicatorType)
+        {
             case "ConnectUp":
-                path.GetComponent<SpriteRenderer>().sprite = pathConnectUp;
+                indicator.GetComponent<SpriteRenderer>().sprite = pathConnectUp;
                 break;
             case "ConnectLeft":
-                path.GetComponent<SpriteRenderer>().sprite = pathConnectLeft;
+                indicator.GetComponent<SpriteRenderer>().sprite = pathConnectLeft;
                 break;
             case "ConnectRight":
-                path.GetComponent<SpriteRenderer>().sprite = pathConnectRight;
+                indicator.GetComponent<SpriteRenderer>().sprite = pathConnectRight;
                 break;
             case "ConnectDown":
-                path.GetComponent<SpriteRenderer>().sprite = pathConnectDown;
+                indicator.GetComponent<SpriteRenderer>().sprite = pathConnectDown;
                 break;
             case "ConnectUpLeft":
-                path.GetComponent<SpriteRenderer>().sprite = pathConnectUpLeft;
+                indicator.GetComponent<SpriteRenderer>().sprite = pathConnectUpLeft;
                 break;
             case "ConnectUpRight":
-                path.GetComponent<SpriteRenderer>().sprite = pathConnectUpRight;
+                indicator.GetComponent<SpriteRenderer>().sprite = pathConnectUpRight;
                 break;
             case "ConnectUpDown":
-                path.GetComponent<SpriteRenderer>().sprite = pathConnectUpDown;
+                indicator.GetComponent<SpriteRenderer>().sprite = pathConnectUpDown;
                 break;
             case "ConnectLeftRight":
-                path.GetComponent<SpriteRenderer>().sprite = pathConnectLeftRight;
+                indicator.GetComponent<SpriteRenderer>().sprite = pathConnectLeftRight;
                 break;
             case "ConnectLeftDown":
-                path.GetComponent<SpriteRenderer>().sprite = pathConnectLeftDown;
+                indicator.GetComponent<SpriteRenderer>().sprite = pathConnectLeftDown;
                 break;
             case "ConnectRightDown":
-                path.GetComponent<SpriteRenderer>().sprite = pathConnectRightDown;
+                indicator.GetComponent<SpriteRenderer>().sprite = pathConnectRightDown;
                 break;
             case "ArriveFromBelow":
-                path.GetComponent<SpriteRenderer>().sprite = pathArriveFromBelow;
+                indicator.GetComponent<SpriteRenderer>().sprite = pathArriveFromBelow;
                 break;
             case "ArriveFromRight":
-                path.GetComponent<SpriteRenderer>().sprite = pathArriveFromRight;
+                indicator.GetComponent<SpriteRenderer>().sprite = pathArriveFromRight;
                 break;
             case "ArriveFromLeft":
-                path.GetComponent<SpriteRenderer>().sprite = pathArriveFromLeft;
+                indicator.GetComponent<SpriteRenderer>().sprite = pathArriveFromLeft;
                 break;
             case "ArriveFromAbove":
-                path.GetComponent<SpriteRenderer>().sprite = pathArriveFromAbove;
+                indicator.GetComponent<SpriteRenderer>().sprite = pathArriveFromAbove;
                 break;
         }
 
         if (player == Runner.LocalPlayer)
         {
-            path.GetComponent<SpriteRenderer>().enabled = true;
+            indicator.GetComponent<SpriteRenderer>().enabled = true;
+        }
+    }
+
+    /* Rpcs
+     * Rpc_SetResources(int resourcesRemaining)
+     * public void Rpc_SetUpSpawnUnit(string uName, int uNum)
+     * public void Rpc_SetUpSpawnStructure(string sName, int sNum)
+     * public void Rpc_SetUpSpawnConstructionSite(string cSName, int cSPNum, Unit builder)
+     */
+    [Rpc(RpcSources.All, RpcTargets.All)]
+    public void Rpc_SetResources(int resourcesRemaining)
+    {
+        resources = resourcesRemaining;
+    }
+
+    [Rpc(RpcSources.All, RpcTargets.All)]
+    public void Rpc_SetUpSpawnUnit(string uName, int uNum)
+    {
+        if (Runner.IsServer)
+        {
+            if (unit == null)
+            {
+                uNameToSpawn = uName;
+                uPNumToSpawn = uNum;
+                settingUpUnit = true;
+            }
+        }
+    }
+
+    [Rpc(RpcSources.All, RpcTargets.All)]
+    public void Rpc_SetUpSpawnStructure(string sName, int sNum)
+    {
+        if (Runner.IsServer)
+        {
+            if (structure == null)
+            {
+                sNameToSpawn = sName;
+                sPNumToSpawn = sNum;
+                settingUpStructure = true;
+            }
+        }
+    }
+
+    [Rpc(RpcSources.All, RpcTargets.All)]
+    public void Rpc_SetUpSpawnConstructionSite(string cSName, int cSPNum, Unit builder)
+    {
+        if (Runner.IsServer)
+        {
+            if (structure == null)
+            {
+                cSNameToSpawn = cSName;
+                cSPNumToSpawn = cSPNum;
+                cSBuilder = builder;
+                settingUpConstructionSite = true;
+            }
         }
     }
 }

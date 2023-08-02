@@ -3,112 +3,138 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
-public class Unit : NetworkBehaviour
+public class Unit : PlayerPossessedObject
 {
     // Variables
-    // Initialized in the inspector
-    [SerializeField] protected Sprite color0;
-    [SerializeField] protected Sprite color1;
-    [SerializeField] protected Sprite color2;
-    // Initialized at spawn
-    [Networked] protected string unitName { get; set; }
-    [Networked] protected string unitType { get; set; }
-    [Networked] protected int maxHP { get; set; }
-    [Networked] protected int HP { get; set; }
-    [Networked] protected int visionRange { get; set; }
-    [Networked] protected int moveRange { get; set; }
-    [Networked] protected int attack { get; set; }
-    [Networked] protected int attackMinRange { get; set; }
-    [Networked] protected int attackMaxRange { get; set; }
-    [Networked] protected string attackType { get; set; }
-    [Networked] protected string description { get; set; }
-    [Networked] protected bool moved { get; set; }
-    [Networked] protected bool allActionsUsed { get; set; }
-    // Set at run time
-    [Networked] protected int playerNum { get; set; }
+    [SerializeField] private GameObject workIndicator;
+    protected Structure constructionSite;
 
     // Functions
-    // Public Functions
-    // Setters
-    public void SetPlayerNum(int playerNum_)
+    // Start
+    public override void Spawned()
     {
-        playerNum = playerNum_;
-        playerNumChanged = !playerNumChanged;
+        base.Spawned();
     }
 
-    [Rpc(RpcSources.All, RpcTargets.All)]
-    public void Rpc_SetTransform(Vector3 pos) { transform.position = pos; }
-
-    // Getters
-    public int GetPlayerNum() { return playerNum; }
-    public string GetUnitName() { return unitName; }
-    public string GetUnitType() { return unitType; }
-    public int GetMaxHP() { return maxHP; }
-    public int GetHP() { return HP; }
-    public int GetVisionRange() { return visionRange; }
-    public int GetMoveRange() { return moveRange; }
-    public int GetAttack() { return attack; }
-    public int GetAttackMinRange() { return attackMinRange; }
-    public int GetAttackMaxRange() { return attackMaxRange; }
-    public string GetAttackType() { return attackType; }
-    public string GetDescription() { return description; }
-    public bool HasMoved() { return moved; }
-
-    // Reset actions
-    public void ResetActions()
+    public override void Despawned(NetworkRunner runner, bool hasState)
     {
-        Rpc_SetAllActionsUsed(false);
-    }
+        isDestroyed = true;
 
-    // Move Function (called by the playercontroller)
-    public void Move(List<TileInfo> path)
-    {
-        moved = true;
-        Rpc_SetMoved(moved);
-    }
-
-    // On Changed Functions
-    [Networked(OnChanged = nameof(OnPlayerNumChanged))]
-    public NetworkBool playerNumChanged { get; set; }
-    public static void OnPlayerNumChanged(Changed<Unit> changed)
-    {
-        Dictionary<int, PlayerController> players = FindObjectOfType<GameManager>().GetPlayers();
-        if (changed.Behaviour.playerNum == 0)
+        if (hasState)
         {
-            changed.Behaviour.GetComponent<SpriteRenderer>().sprite = changed.Behaviour.color0;
+            if (Runner.IsServer)
+            {
+                curTile.Rpc_SetUnit(null);
+                PlayerController pc = FindObjectOfType<GameManager>().GetPlayers()[playerNum];
+                pc.Rpc_ResetUnitList();
+                pc.Rpc_ResetVision();
+            }
         }
-#pragma warning disable CS0618 // Type or member is obsolete
-        else if (changed.Behaviour.Runner.LocalPlayer == players[changed.Behaviour.playerNum].GetPlayerRef())
-#pragma warning restore CS0618 // Type or member is obsolete
+    }
+
+    // Coroutines
+    protected override IEnumerator Setup()
+    {
+        StartCoroutine(base.Setup());
+
+        while (!ppoSetupComplete) { yield return null; }  // Wait for parent routine to finish
+
+        bool unitAssigned = false;
+        while (!unitAssigned)
         {
-            changed.Behaviour.GetComponent<SpriteRenderer>().sprite = changed.Behaviour.color1;
-            players[changed.Behaviour.playerNum].AddUnit(changed.Behaviour);
+            if (Runner.LocalPlayer == player)
+            {
+                if (FindObjectOfType<GameManager>().GetPlayers()[playerNum].SetupIsComplete())
+                {
+                    FindObjectOfType<GameManager>().GetPlayers()[playerNum].AddUnit(this);
+                    unitAssigned = true;
+                }
+            }
+            else
+            {
+                unitAssigned = true;
+            }
+
+            yield return null;
+        }
+    }
+
+    /* Various Functions
+     * TakeDamage(int damage)
+     * Rpc_SetCS(Structure cs)
+     * StopBuildingCS()
+     */
+    // Receive effects from other sources
+    public override void TakeDamage(int damage)
+    {
+        base.TakeDamage(damage);
+
+        if (HP <= 0)
+        {
+            Rpc_DestroySelf();
+        }
+    }
+
+    // For builders only
+    [Rpc(RpcSources.All, RpcTargets.All)]
+    public void Rpc_SetCS(Structure cs)
+    {
+        constructionSite = cs;
+
+        if (cs != null)
+        {
+            if (cs.GetTile().GetPosY() < curTile.GetPosY())
+            {
+                workIndicator.transform.localPosition = new Vector3(0f, 0.5f, 1f);
+            }
+            else if (cs.GetTile().GetPosX() < curTile.GetPosX())
+            {
+                workIndicator.transform.localPosition = new Vector3(-0.5f, 0f, 1f);
+            }
+            else if (cs.GetTile().GetPosX() > curTile.GetPosX())
+            {
+                workIndicator.transform.localPosition = new Vector3(0.5f, 0f, 1f);
+            }
+            else if (cs.GetTile().GetPosY() > curTile.GetPosY())
+            {
+                workIndicator.transform.localPosition = new Vector3(0f, -0.5f, 1f);
+            }
+
+            workIndicator.SetActive(true);
         }
         else
         {
-            changed.Behaviour.GetComponent<SpriteRenderer>().sprite = changed.Behaviour.color2;
+            workIndicator.SetActive(false);
         }
     }
 
-    // Private Functions
-    // Rpc Functions
-    [Rpc(RpcSources.All, RpcTargets.All)]
-    private void Rpc_SetMoved(bool moved_)
+    // For builders only
+    // Removes references between a construction site and its builder
+    public void StopBuildingCS()
     {
-        moved = moved_;
+        if (constructionSite != null)
+        {
+            constructionSite.Rpc_SetCSBuilder(null);
+        }
+        
+        Rpc_SetCS(null);
     }
 
+    // Includes an indicator for working on structures
     [Rpc(RpcSources.All, RpcTargets.All)]
-    private void Rpc_SetAllActionsUsed(bool allActionsUsed_)
+    public override void Rpc_RevealIfSeen()
     {
-        if (allActionsUsed_)
+        if (!curTile.GetFog())
         {
-            allActionsUsed = true;
+            sprite.enabled = true;
+            HPDisplay.enabled = true;
+            if (workIndicator != null) { workIndicator.GetComponent<SpriteRenderer>().enabled = true; }
         }
-        else  // All action related variables need to be set as unused
+        else
         {
-            allActionsUsed = false;
-            moved = false;
+            sprite.enabled = false;
+            HPDisplay.enabled = false;
+            if (workIndicator != null) { workIndicator.GetComponent<SpriteRenderer>().enabled = false; }
         }
     }
 }
